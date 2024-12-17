@@ -8,7 +8,7 @@
 #include <numeric>
 
 #define RAND_INT 0
-
+#define __gfx942__ 1
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #define HIP_CALL(call) do{  \
     hipError_t err = call;  \
@@ -107,28 +107,38 @@ struct hwreg {
 #endif
 };
 
-#define BLOCK_SIZE 256
+#define BLOCK_SIZE 64
 // assume this is 1d grid size
 __global__ void
 dump_hwreg(const void * input, void * output, int /**/)
 {
-    uint32_t offset = blockIdx.x * BLOCK_SIZE + threadIdx.x;
+    uint32_t offset = blockIdx.x + threadIdx.x;
     uint32_t input_data = *(reinterpret_cast<const uint32_t*>(input) + offset);
 
     auto r = hwreg{};
-
-    uint32x8_t output_data;
-    output_data[0] = blockIdx.x;
-    output_data[1] = threadIdx.x;
-    output_data[2] = input_data;
-    output_data[3] = r.cu_id();
-    output_data[4] = r.sh_id();
-    output_data[5] = r.se_id();
-    output_data[6] = r.wave_id();
-#if (defined(__gfx940__) || defined(__gfx941__) || defined(__gfx942__))
-    output_data[7] = r.xcc_id();
-#endif    
-    *(reinterpret_cast<uint32x8_t*>(output) + offset) = output_data;
+    clock_t start = clock();
+    clock_t now;
+    for (;;) {
+      now = clock();
+      clock_t cycles = now > start ? now - start : now + (0xffffffff - start);
+      if (cycles >= 10000 * (blockIdx.x % 11) ) {
+        break;
+      }
+    }
+    if(threadIdx.x==0) {
+      uint32x8_t output_data;
+      output_data[0] = blockIdx.x;
+      output_data[1] = threadIdx.x;
+      output_data[2] = input_data;
+      output_data[3] = r.cu_id();
+      output_data[4] = r.sh_id();
+      output_data[5] = r.se_id();
+      output_data[6] = r.wave_id();
+  #if (defined(__gfx940__) || defined(__gfx941__) || defined(__gfx942__))
+      output_data[7] = r.xcc_id();
+  #endif    
+      *(reinterpret_cast<uint32x8_t*>(output) + offset) = output_data;
+    }
 }
 
 int main(int argc, char ** argv)
@@ -145,25 +155,23 @@ int main(int argc, char ** argv)
     if (argc >= 2) {
         grids = atoi(argv[1]);
     }
-
+    printf("griddim %d\n", grids);
 
     //fp32 on host
-    uint32_t * host_i = (uint32_t*)malloc(grids*BLOCK_SIZE*sizeof(uint32_t));
-    uint32x8_t * host_o = (uint32x8_t*)malloc(grids*BLOCK_SIZE*sizeof(uint32x8_t));
+    uint32_t * host_i = (uint32_t*)malloc(grids*sizeof(uint32_t));
+    uint32x8_t * host_o = (uint32x8_t*)malloc(grids*sizeof(uint32x8_t));
     void * dev_i;
     void * dev_o;
 
-    HIP_CALL(hipMalloc(&dev_i, grids*BLOCK_SIZE*sizeof(uint32_t)));
-    HIP_CALL(hipMalloc(&dev_o, grids*BLOCK_SIZE*sizeof(uint32x8_t)));
+    HIP_CALL(hipMalloc(&dev_i, grids*sizeof(uint32_t)));
+    HIP_CALL(hipMalloc(&dev_o, grids*sizeof(uint32x8_t)));
     //fp16 cpy to device
-    HIP_CALL(hipMemcpy(dev_i, host_i, grids*BLOCK_SIZE*sizeof(uint32_t), hipMemcpyHostToDevice));
+    HIP_CALL(hipMemcpy(dev_i, host_i, grids*sizeof(uint32_t), hipMemcpyHostToDevice));
 
-    dump_hwreg<<<grids, BLOCK_SIZE>>>(dev_i, dev_o, grids);
+    dump_hwreg<<<grids, 64>>>(dev_i, dev_o, grids);
 
-    HIP_CALL(hipMemcpy(host_o, dev_o, grids*BLOCK_SIZE*sizeof(uint32x8_t), hipMemcpyDeviceToHost));
-
-    for(auto i = 0; i < grids*BLOCK_SIZE; i++) {
-        if (i % BLOCK_SIZE != 0) continue;
+    HIP_CALL(hipMemcpy(host_o, dev_o, grids*sizeof(uint32x8_t), hipMemcpyDeviceToHost));
+    for(auto i = 0; i < grids; i++) {
         auto o = host_o[i];
 
         uint32_t blk_id = o[0];
@@ -177,6 +185,12 @@ int main(int argc, char ** argv)
         printf("block:%4d, cu_id:%2u, sh_id:%2u, se_id:%2u, wave_id:%2u", blk_id, cu_id, sh_id, se_id, wave_id);
 #if (defined(__gfx940__) || defined(__gfx941__) || defined(__gfx942__))
         printf("xcc_id:%2u", xcc_id);
+        if (i>=4) 
+          printf(",xcc_diff_blk_%d=%d", i - 4, xcc_id - host_o[i - 4][7]);
+        // if (i>=80) {
+        //   printf(",se_diff_blk_%d=%d", i - 80, se_id - host_o[i - 80][4]);
+        //   printf(",cu_diff_blk_%d=%d", i - 80, cu_id - host_o[i - 80][3]);
+        // }
 #endif
         printf("\n");
     }
