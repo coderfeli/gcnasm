@@ -12,9 +12,15 @@ are resident at once, which is what makes it legal for a block to spin-wait on
 the others.
 
 ```
-sh rebuild.sh                       # ARCH=gfx1250 sh rebuild.sh to retarget
-./build/test.exe [trace_iters] [loop_iters]     # default 64 10000
+sh rebuild.sh                  # defaults to gfx950 -> build/gfx950/test.exe
+ARCH=gfx1250 sh rebuild.sh     #              gfx1250 -> build/gfx1250/test.exe
+
+./build/gfx950/test.exe                    # default 64 trace iters, 10000 loop iters
+./build/gfx950/test.exe 64 10000           # [trace_iters] [loop_iters]
 ```
+
+The build dir is per-arch so the two can coexist. `-save-temps` leaves the ISA
+next to the binary as `build/<arch>/main.hip-hip-amdgcn-amd-amdhsa-<arch>.s`.
 
 Exit code is non-zero if any check fails. Builds clean for gfx90a / gfx942 /
 gfx950 / gfx1201 / gfx1250; only gfx950 has been run (see the gfx1250 section
